@@ -123,17 +123,11 @@
     </div>
   </div>
 
-  <script>
-    /***********************
-     * CONFIG / WORD LIST
-     ***********************/
-    // Keep this small for demo. Replace with your own list.
-    const ANSWERS = [
-      "crane","slate","trace","adore","brave","cider","flame","grind","honey","ivory",
-      "joker","knock","lemon","mango","nerdy","ocean","pride","quart","risky","sugar",
-      "tiger","upper","vivid","waltz","xenon","yacht","zesty","eagle","piano","spice",
-      "couch","cabin","toast","sheep","route","storm","badge","medal","crown","shark"
-    ];
+  <script type="module">
+import { ANSWERS, ALLOWED } from "./words.txt";
+
+
+const ALLOWED_SET = new Set(ALLOWED);
     // Allowed guesses (answers + extras). For real Wordle-likes, use a bigger list.
     const ALLOWED = new Set([...ANSWERS, "stare","raise","arise","irate","ratio","tears","rates","stale","react","later"]);
 
@@ -142,7 +136,7 @@
     /***********************
      * STATE
      ***********************/
-    let mode = "random"; // "daily" or "random"
+    let mode = "daily"; // "daily" or "random"
     let answer = "";
     let row = 0;
     let col = 0;

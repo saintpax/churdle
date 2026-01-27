@@ -1,0 +1,446 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Wordle-like</title>
+  <style>
+    :root{
+      --bg:#121213;
+      --fg:#d7dadc;
+      --tile:#3a3a3c;
+      --border:#3a3a3c;
+      --good:#538d4e;
+      --present:#b59f3b;
+      --bad:#3a3a3c;
+      --key:#818384;
+      --keyText:#ffffff;
+      --tileSize: 58px;
+      --gap: 6px;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    }
+    body{
+      margin:0; background:var(--bg); color:var(--fg);
+      display:flex; min-height:100vh; align-items:center; justify-content:center;
+    }
+    .app{ width:min(520px, 96vw); padding:16px 12px 20px; }
+    header{
+      display:flex; align-items:center; justify-content:space-between;
+      border-bottom:1px solid #2a2a2c; padding-bottom:10px; margin-bottom:14px;
+    }
+    h1{ margin:0; letter-spacing:2px; font-weight:800; font-size:22px; }
+    .status{ min-height:26px; margin:10px 0 12px; text-align:center; font-weight:600; }
+    .status.good{ color:#9be28f; }
+    .status.bad{ color:#ff8f8f; }
+    .grid{
+      display:grid;
+      grid-template-rows: repeat(6, var(--tileSize));
+      gap: var(--gap);
+      width: calc(5 * var(--tileSize) + 4 * var(--gap));
+      margin: 0 auto 16px;
+    }
+    .row{
+      display:grid;
+      grid-template-columns: repeat(5, var(--tileSize));
+      gap: var(--gap);
+    }
+    .tile{
+      width:var(--tileSize); height:var(--tileSize);
+      border:2px solid var(--border);
+      display:flex; align-items:center; justify-content:center;
+      font-size:32px; font-weight:800; text-transform:uppercase;
+      user-select:none;
+      box-sizing:border-box;
+      background:transparent;
+    }
+    .tile.filled{ border-color:#565758; }
+    .tile.reveal{
+      animation: flip 500ms ease forwards;
+      transform-style:preserve-3d;
+    }
+    @keyframes flip{
+      0%{ transform: rotateX(0deg); }
+      49%{ transform: rotateX(90deg); }
+      50%{ transform: rotateX(90deg); }
+      100%{ transform: rotateX(0deg); }
+    }
+    .tile.good{ background:var(--good); border-color:var(--good); }
+    .tile.present{ background:var(--present); border-color:var(--present); }
+    .tile.bad{ background:var(--bad); border-color:var(--bad); }
+    .shake{ animation: shake 350ms ease; }
+    @keyframes shake{
+      0%,100%{ transform: translateX(0); }
+      20%{ transform: translateX(-6px); }
+      40%{ transform: translateX(6px); }
+      60%{ transform: translateX(-4px); }
+      80%{ transform: translateX(4px); }
+    }
+
+    .keyboard{ width:min(520px, 96vw); margin:0 auto; }
+    .kb-row{ display:flex; gap:6px; justify-content:center; margin:6px 0; }
+    button.key{
+      background:var(--key); color:var(--keyText);
+      border:none; border-radius:4px;
+      height:58px; padding:0 10px;
+      font-weight:700; cursor:pointer; user-select:none;
+      text-transform:uppercase;
+    }
+    button.key.small{ font-size:12px; }
+    button.key.wide{ min-width:64px; }
+    button.key.letter{ width:43px; }
+    button.key.good{ background:var(--good); }
+    button.key.present{ background:var(--present); }
+    button.key.bad{ background:#565758; }
+    .footer{
+      margin-top:14px; display:flex; justify-content:center; gap:10px; flex-wrap:wrap;
+      opacity:.9; font-size:13px;
+    }
+    .footer button{
+      background:#1f1f21; color:var(--fg);
+      border:1px solid #2a2a2c; border-radius:8px;
+      padding:10px 12px; cursor:pointer;
+    }
+    .footer button:hover{ border-color:#3a3a3c; }
+    .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; opacity:.9; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>WORDLE-LIKE</h1>
+      <div class="mono" id="modeLabel">mode: random</div>
+    </header>
+
+    <div class="grid" id="grid"></div>
+    <div class="status" id="status"></div>
+
+    <div class="keyboard" id="keyboard"></div>
+
+    <div class="footer">
+      <button id="newGameBtn">New Game</button>
+      <button id="toggleModeBtn">Toggle Daily/Random</button>
+      <button id="revealBtn">Reveal (debug)</button>
+    </div>
+  </div>
+
+  <script>
+    /***********************
+     * CONFIG / WORD LIST
+     ***********************/
+    // Keep this small for demo. Replace with your own list.
+    const ANSWERS = [
+      "crane","slate","trace","adore","brave","cider","flame","grind","honey","ivory",
+      "joker","knock","lemon","mango","nerdy","ocean","pride","quart","risky","sugar",
+      "tiger","upper","vivid","waltz","xenon","yacht","zesty","eagle","piano","spice",
+      "couch","cabin","toast","sheep","route","storm","badge","medal","crown","shark"
+    ];
+    // Allowed guesses (answers + extras). For real Wordle-likes, use a bigger list.
+    const ALLOWED = new Set([...ANSWERS, "stare","raise","arise","irate","ratio","tears","rates","stale","react","later"]);
+
+    const ROWS = 6, COLS = 5;
+
+    /***********************
+     * STATE
+     ***********************/
+    let mode = "random"; // "daily" or "random"
+    let answer = "";
+    let row = 0;
+    let col = 0;
+    let board = Array.from({length: ROWS}, () => Array(COLS).fill(""));
+    let locked = false;
+    let keyState = {}; // letter -> "good" | "present" | "bad"
+
+    const gridEl = document.getElementById("grid");
+    const statusEl = document.getElementById("status");
+    const keyboardEl = document.getElementById("keyboard");
+    const modeLabelEl = document.getElementById("modeLabel");
+
+    /***********************
+     * UTIL
+     ***********************/
+    function setStatus(msg, kind=""){
+      statusEl.textContent = msg;
+      statusEl.className = "status" + (kind ? ` ${kind}` : "");
+    }
+
+    function todayKey(){
+      // Simple “daily” seed based on local date
+      const d = new Date();
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth()+1).padStart(2,"0");
+      const dd = String(d.getDate()).padStart(2,"0");
+      return `${yyyy}-${mm}-${dd}`;
+    }
+
+    function seededIndex(seedStr, mod){
+      // Deterministic hash -> [0, mod)
+      let h = 2166136261;
+      for (let i=0;i<seedStr.length;i++){
+        h ^= seedStr.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+      }
+      h >>>= 0;
+      return h % mod;
+    }
+
+    function pickAnswer(){
+      if (mode === "daily"){
+        const idx = seededIndex(todayKey(), ANSWERS.length);
+        return ANSWERS[idx];
+      }
+      const idx = Math.floor(Math.random() * ANSWERS.length);
+      return ANSWERS[idx];
+    }
+
+    function priorityRank(state){
+      // higher wins when updating keyboard colors
+      return state === "good" ? 3 : state === "present" ? 2 : state === "bad" ? 1 : 0;
+    }
+
+    /***********************
+     * RENDER
+     ***********************/
+    function buildGrid(){
+      gridEl.innerHTML = "";
+      for (let r=0;r<ROWS;r++){
+        const rowEl = document.createElement("div");
+        rowEl.className = "row";
+        rowEl.dataset.r = r;
+        for (let c=0;c<COLS;c++){
+          const t = document.createElement("div");
+          t.className = "tile";
+          t.dataset.r = r;
+          t.dataset.c = c;
+          t.textContent = "";
+          rowEl.appendChild(t);
+        }
+        gridEl.appendChild(rowEl);
+      }
+    }
+
+    function buildKeyboard(){
+      keyboardEl.innerHTML = "";
+      const rows = [
+        ["q","w","e","r","t","y","u","i","o","p"],
+        ["a","s","d","f","g","h","j","k","l"],
+        ["enter","z","x","c","v","b","n","m","back"]
+      ];
+
+      rows.forEach((letters, i) => {
+        const rowEl = document.createElement("div");
+        rowEl.className = "kb-row";
+        letters.forEach(k => {
+          const btn = document.createElement("button");
+          btn.className = "key";
+          btn.dataset.key = k;
+
+          if (k === "enter"){
+            btn.textContent = "Enter";
+            btn.classList.add("wide","small");
+          } else if (k === "back"){
+            btn.textContent = "⌫";
+            btn.classList.add("wide");
+          } else {
+            btn.textContent = k;
+            btn.classList.add("letter");
+          }
+
+          btn.addEventListener("click", () => handleKey(k));
+          rowEl.appendChild(btn);
+        });
+        keyboardEl.appendChild(rowEl);
+      });
+    }
+
+    function paintBoard(){
+      for (let r=0;r<ROWS;r++){
+        for (let c=0;c<COLS;c++){
+          const tile = gridEl.querySelector(`.tile[data-r="${r}"][data-c="${c}"]`);
+          tile.textContent = board[r][c];
+          tile.classList.toggle("filled", !!board[r][c]);
+          // Don’t wipe reveal colors here; reveal applies classes directly.
+          if (r > row) {
+            tile.classList.remove("good","present","bad","reveal");
+          }
+        }
+      }
+      paintKeyboard();
+    }
+
+    function paintKeyboard(){
+      const btns = keyboardEl.querySelectorAll("button.key");
+      btns.forEach(b => {
+        const k = b.dataset.key;
+        if (k.length === 1){
+          b.classList.remove("good","present","bad");
+          const st = keyState[k];
+          if (st) b.classList.add(st);
+        }
+      });
+    }
+
+    function shakeRow(r){
+      const rowEl = gridEl.querySelector(`.row[data-r="${r}"]`);
+      rowEl.classList.add("shake");
+      setTimeout(() => rowEl.classList.remove("shake"), 380);
+    }
+
+    /***********************
+     * GAME LOGIC (WORDLE FEEDBACK)
+     ***********************/
+    function scoreGuess(guess, ans){
+      // Returns array of "good" | "present" | "bad" per letter.
+      // Correct handling of duplicates:
+      // 1) mark greens, remove from counts
+      // 2) mark yellows if remaining count exists
+      const result = Array(COLS).fill("bad");
+      const counts = {};
+      for (let i=0;i<COLS;i++){
+        const ch = ans[i];
+        counts[ch] = (counts[ch] || 0) + 1;
+      }
+      // greens
+      for (let i=0;i<COLS;i++){
+        if (guess[i] === ans[i]){
+          result[i] = "good";
+          counts[guess[i]] -= 1;
+        }
+      }
+      // yellows
+      for (let i=0;i<COLS;i++){
+        if (result[i] === "good") continue;
+        const ch = guess[i];
+        if (counts[ch] > 0){
+          result[i] = "present";
+          counts[ch] -= 1;
+        }
+      }
+      return result;
+    }
+
+    async function revealRow(r, states){
+      locked = true;
+      for (let c=0;c<COLS;c++){
+        const tile = gridEl.querySelector(`.tile[data-r="${r}"][data-c="${c}"]`);
+        tile.classList.add("reveal");
+        // delay mid-flip before applying color
+        await new Promise(res => setTimeout(res, 220));
+        tile.classList.remove("good","present","bad");
+        tile.classList.add(states[c]);
+        // update keyboard state
+        const ch = board[r][c].toLowerCase();
+        const prev = keyState[ch];
+        if (priorityRank(states[c]) > priorityRank(prev)) keyState[ch] = states[c];
+        paintKeyboard();
+        await new Promise(res => setTimeout(res, 280));
+        tile.classList.remove("reveal");
+      }
+      locked = false;
+    }
+
+    function currentGuess(){
+      return board[row].join("").toLowerCase();
+    }
+
+    async function submit(){
+      if (locked) return;
+      if (col < COLS){
+        setStatus("Not enough letters", "bad");
+        shakeRow(row);
+        return;
+      }
+      const guess = currentGuess();
+      if (!ALLOWED.has(guess)){
+        setStatus("Not in word list", "bad");
+        shakeRow(row);
+        return;
+      }
+
+      setStatus("");
+      const states = scoreGuess(guess, answer);
+      await revealRow(row, states);
+
+      if (guess === answer){
+        setStatus("Nice. You got it ✅", "good");
+        locked = true;
+        return;
+      }
+
+      row++;
+      col = 0;
+
+      if (row >= ROWS){
+        setStatus(`Out of guesses. Answer: ${answer.toUpperCase()}`, "bad");
+        locked = true;
+      }
+    }
+
+    function typeLetter(ch){
+      if (locked) return;
+      if (row >= ROWS) return;
+      if (col >= COLS) return;
+      board[row][col] = ch.toUpperCase();
+      col++;
+      paintBoard();
+      setStatus("");
+    }
+
+    function backspace(){
+      if (locked) return;
+      if (col <= 0) return;
+      col--;
+      board[row][col] = "";
+      paintBoard();
+      setStatus("");
+    }
+
+    function handleKey(k){
+      if (k === "enter") return submit();
+      if (k === "back") return backspace();
+      if (/^[a-z]$/.test(k)) return typeLetter(k);
+    }
+
+    function onKeyDown(e){
+      if (e.key === "Enter") return handleKey("enter");
+      if (e.key === "Backspace") return handleKey("back");
+      const k = e.key.toLowerCase();
+      if (/^[a-z]$/.test(k)) handleKey(k);
+    }
+
+    /***********************
+     * NEW GAME
+     ***********************/
+    function newGame(){
+      answer = pickAnswer();
+      row = 0; col = 0;
+      board = Array.from({length: ROWS}, () => Array(COLS).fill(""));
+      keyState = {};
+      locked = false;
+      setStatus("");
+      modeLabelEl.textContent = `mode: ${mode}`;
+      buildGrid();
+      paintBoard();
+      paintKeyboard();
+      // console.log("ANSWER:", answer); // uncomment for debugging
+    }
+
+    /***********************
+     * WIRES
+     ***********************/
+    document.getElementById("newGameBtn").addEventListener("click", newGame);
+    document.getElementById("toggleModeBtn").addEventListener("click", () => {
+      mode = (mode === "random") ? "daily" : "random";
+      newGame();
+    });
+    document.getElementById("revealBtn").addEventListener("click", () => {
+      setStatus(`Answer: ${answer.toUpperCase()}`, "bad");
+    });
+    window.addEventListener("keydown", onKeyDown);
+
+    // init
+    buildGrid();
+    buildKeyboard();
+    newGame();
+  </script>
+</body>
+</html>

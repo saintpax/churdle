@@ -1,0 +1,14 @@
+{
+  "name": "Flick",
+  "short_name": "Flick",
+  "description": "A minimalist flick-the-puck-into-the-goal fidget game.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#161616",
+  "theme_color": "#161616",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

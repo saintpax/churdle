@@ -533,17 +533,22 @@
     canvas.addEventListener("pointerup", onPointerUp);
     canvas.addEventListener("pointercancel", onPointerUp);
 
-    overlayStart.addEventListener("click", function () {
+    function beginFromStart() {
       if (state.screen !== "start") return;
       hideOverlay(overlayStart);
       startLevel(1, false);
-    });
+    }
 
-    overlayFailed.addEventListener("click", function () {
+    function retryFromFailed() {
       if (state.screen !== "levelFailed") return;
       hideOverlay(overlayFailed);
       startLevel(state.level, true);
-    });
+    }
+
+    overlayStart.addEventListener("click", beginFromStart);
+    overlayStart.addEventListener("pointerup", beginFromStart);
+    overlayFailed.addEventListener("click", retryFromFailed);
+    overlayFailed.addEventListener("pointerup", retryFromFailed);
 
     try {
       state.best = Number(localStorage.getItem("flick_best") || 0);

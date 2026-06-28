@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="theme-color" content="#121213" />
+  <title>Golf Rangefinder</title>
+  <style>
+    :root{
+      --bg:#121213;
+      --fg:#d7dadc;
+      --card:#1f1f21;
+      --border:#2a2a2c;
+      --good:#538d4e;
+      --warn:#b59f3b;
+      --bad:#c0392b;
+      --muted:#818384;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    }
+    *{ box-sizing:border-box; }
+    body{
+      margin:0; background:var(--bg); color:var(--fg);
+      display:flex; min-height:100vh; align-items:center; justify-content:center;
+    }
+    .app{ width:min(420px, 94vw); padding:16px 12px 28px; text-align:center; }
+    header{
+      display:flex; align-items:center; justify-content:space-between;
+      border-bottom:1px solid var(--border); padding-bottom:10px; margin-bottom:16px;
+    }
+    h1{ margin:0; letter-spacing:1px; font-weight:800; font-size:20px; }
+    button{
+      font-family:inherit; cursor:pointer; border:none; border-radius:8px;
+      background:var(--card); color:var(--fg); border:1px solid var(--border);
+    }
+    #unitToggle{ padding:8px 12px; font-weight:700; }
+
+    .warning{
+      background:#3a2f10; border:1px solid var(--warn); color:#f0e0a0;
+      border-radius:8px; padding:10px; margin-bottom:14px; font-size:13px; text-align:left;
+    }
+
+    .readout{ margin:18px 0 6px; }
+    .distance{ font-size:72px; font-weight:800; line-height:1; }
+    .unit{ font-size:14px; color:var(--muted); margin-top:4px; }
+
+    .arrowWrap{ margin:18px auto; width:96px; height:96px; }
+    .arrow{
+      font-size:64px; line-height:96px; display:block;
+      transition: transform 200ms ease;
+      transform: rotate(0deg);
+    }
+
+    .bearing{ font-size:15px; min-height:20px; margin-bottom:10px; }
+    .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+
+    .statusRow{
+      font-size:13px; min-height:18px; margin:8px 0 18px; color:var(--muted);
+    }
+    .statusRow.good{ color:#9be28f; }
+    .statusRow.warn{ color:#e8d44d; }
+    .statusRow.bad{ color:#ff8f8f; }
+
+    .actions{ display:flex; flex-direction:column; gap:10px; }
+    .actions button{ padding:14px; font-size:15px; font-weight:700; }
+    .actions button.primary{ background:var(--good); border-color:var(--good); color:#fff; }
+    .actions button:disabled{ opacity:.45; cursor:default; }
+
+    .footnote{
+      margin-top:20px; font-size:12.5px; color:var(--muted); line-height:1.5;
+    }
+    .footnote a{ color:var(--fg); }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>GOLF RANGEFINDER</h1>
+      <button id="unitToggle" class="mono" title="Toggle yards/meters">YD</button>
+    </header>
+
+    <div id="secureWarning" class="warning" hidden>
+      Your phone's browser will only share GPS location on a secure page.
+      Open this over <b>https://</b> (or on <b>localhost</b>) for location access to work.
+    </div>
+
+    <div class="readout">
+      <div id="distanceValue" class="distance">--</div>
+      <div id="distanceUnit" class="unit">yards to target</div>
+    </div>
+
+    <div class="arrowWrap">
+      <div id="arrow" class="arrow">&#8593;</div>
+    </div>
+    <div id="bearingText" class="bearing mono">No target set</div>
+
+    <div id="gpsStatus" class="statusRow mono">Waiting for GPS&hellip;</div>
+
+    <div class="actions">
+      <button id="markTargetBtn" class="primary">Mark Target Here</button>
+      <button id="clearTargetBtn" disabled>Clear Target</button>
+      <button id="compassBtn">Enable Compass</button>
+    </div>
+
+    <div class="footnote">
+      Walk to the flag (or hazard, layup spot, anything) and tap <b>Mark Target Here</b>,
+      then walk back to your ball. Distance updates live from your phone's GPS.
+      The arrow points toward the target once you enable the compass.
+    </div>
+  </div>
+
+  <script>
+    const M_TO_YD = 1.0936132983;
+    const COMPASS_DIRS = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
+
+    const distanceValueEl = document.getElementById("distanceValue");
+    const distanceUnitEl = document.getElementById("distanceUnit");
+    const bearingTextEl = document.getElementById("bearingText");
+    const arrowEl = document.getElementById("arrow");
+    const gpsStatusEl = document.getElementById("gpsStatus");
+    const secureWarningEl = document.getElementById("secureWarning");
+    const unitToggleBtn = document.getElementById("unitToggle");
+    const markTargetBtn = document.getElementById("markTargetBtn");
+    const clearTargetBtn = document.getElementById("clearTargetBtn");
+    const compassBtn = document.getElementById("compassBtn");
+
+    let target = JSON.parse(localStorage.getItem("rf_target") || "null");
+    let unit = localStorage.getItem("rf_unit") || "yd";
+    let lastCoords = null;
+    let watchId = null;
+    let headingEnabled = false;
+    let currentHeading = null;
+
+    function toRad(d){ return d * Math.PI / 180; }
+    function toDeg(r){ return r * 180 / Math.PI; }
+
+    function distanceMeters(lat1, lon1, lat2, lon2){
+      const R = 6371000;
+      const dLat = toRad(lat2 - lat1);
+      const dLon = toRad(lon2 - lon1);
+      const a = Math.sin(dLat/2)**2 +
+                Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon/2)**2;
+      return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    function bearingDegrees(lat1, lon1, lat2, lon2){
+      const y = Math.sin(toRad(lon2 - lon1)) * Math.cos(toRad(lat2));
+      const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
+                Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(toRad(lon2 - lon1));
+      return (toDeg(Math.atan2(y, x)) + 360) % 360;
+    }
+
+    function compassAbbrev(deg){
+      return COMPASS_DIRS[Math.round(deg / 22.5) % 16];
+    }
+
+    function setGpsStatus(msg, kind){
+      gpsStatusEl.textContent = msg;
+      gpsStatusEl.className = "statusRow mono" + (kind ? ` ${kind}` : "");
+    }
+
+    function accuracyKind(acc){
+      if (acc <= 10) return "good";
+      if (acc <= 25) return "warn";
+      return "bad";
+    }
+
+    function errorMessage(err){
+      switch (err.code){
+        case err.PERMISSION_DENIED: return "Location permission denied.";
+        case err.POSITION_UNAVAILABLE: return "Location unavailable.";
+        case err.TIMEOUT: return "Location request timed out.";
+        default: return "Location error.";
+      }
+    }
+
+    function renderTargetState(){
+      markTargetBtn.textContent = target ? "Re-mark Target Here" : "Mark Target Here";
+      clearTargetBtn.disabled = !target;
+    }
+
+    function updateUnitButton(){
+      unitToggleBtn.textContent = unit.toUpperCase();
+      distanceUnitEl.textContent = unit === "yd" ? "yards to target" : "meters to target";
+    }
+
+    function updateArrow(targetBearing){
+      let rotation = targetBearing;
+      if (headingEnabled && currentHeading !== null){
+        rotation = (targetBearing - currentHeading + 360) % 360;
+      }
+      arrowEl.style.transform = `rotate(${rotation}deg)`;
+    }
+
+    function updateDistance(){
+      if (!target){
+        distanceValueEl.textContent = "--";
+        bearingTextEl.textContent = "No target set";
+        arrowEl.style.transform = "";
+        return;
+      }
+      if (!lastCoords){
+        distanceValueEl.textContent = "--";
+        bearingTextEl.textContent = "Waiting for GPS…";
+        return;
+      }
+      const distM = distanceMeters(lastCoords.latitude, lastCoords.longitude, target.lat, target.lon);
+      const brng = bearingDegrees(lastCoords.latitude, lastCoords.longitude, target.lat, target.lon);
+      const shown = unit === "yd" ? distM * M_TO_YD : distM;
+      distanceValueEl.textContent = Math.round(shown).toLocaleString();
+      bearingTextEl.textContent = `${Math.round(brng)}° ${compassAbbrev(brng)} to target`;
+      updateArrow(brng);
+    }
+
+    function onPosition(pos){
+      lastCoords = pos.coords;
+      setGpsStatus(`±${Math.round(pos.coords.accuracy)} m accuracy`, accuracyKind(pos.coords.accuracy));
+      updateDistance();
+    }
+
+    function onPositionError(err){
+      setGpsStatus(errorMessage(err), "bad");
+    }
+
+    function startWatch(){
+      watchId = navigator.geolocation.watchPosition(onPosition, onPositionError, {
+        enableHighAccuracy: true,
+        maximumAge: 1000,
+        timeout: 15000
+      });
+    }
+
+    function markTarget(){
+      if (!lastCoords){
+        setGpsStatus("Still waiting for a GPS fix — try again in a moment.", "warn");
+        return;
+      }
+      target = { lat: lastCoords.latitude, lon: lastCoords.longitude, ts: Date.now() };
+      localStorage.setItem("rf_target", JSON.stringify(target));
+      renderTargetState();
+      updateDistance();
+    }
+
+    function clearTarget(){
+      target = null;
+      localStorage.removeItem("rf_target");
+      renderTargetState();
+      updateDistance();
+    }
+
+    function toggleUnit(){
+      unit = unit === "yd" ? "m" : "yd";
+      localStorage.setItem("rf_unit", unit);
+      updateUnitButton();
+      updateDistance();
+    }
+
+    function onOrientation(e){
+      let heading = null;
+      if (typeof e.webkitCompassHeading === "number"){
+        heading = e.webkitCompassHeading;
+      } else if (e.alpha !== null){
+        heading = 360 - e.alpha;
+      }
+      if (heading === null) return;
+      currentHeading = (heading + 360) % 360;
+      if (target && lastCoords){
+        const brng = bearingDegrees(lastCoords.latitude, lastCoords.longitude, target.lat, target.lon);
+        updateArrow(brng);
+      }
+    }
+
+    async function enableCompass(){
+      if (typeof DeviceOrientationEvent !== "undefined" &&
+          typeof DeviceOrientationEvent.requestPermission === "function"){
+        try {
+          const result = await DeviceOrientationEvent.requestPermission();
+          if (result !== "granted"){
+            setGpsStatus("Compass permission denied.", "warn");
+            return;
+          }
+        } catch (e){
+          setGpsStatus("Compass permission error.", "warn");
+          return;
+        }
+      }
+      window.addEventListener("deviceorientationabsolute", onOrientation, true);
+      window.addEventListener("deviceorientation", onOrientation, true);
+      headingEnabled = true;
+      compassBtn.textContent = "Compass On";
+      compassBtn.disabled = true;
+    }
+
+    markTargetBtn.addEventListener("click", markTarget);
+    clearTargetBtn.addEventListener("click", clearTarget);
+    unitToggleBtn.addEventListener("click", toggleUnit);
+    compassBtn.addEventListener("click", enableCompass);
+    window.addEventListener("beforeunload", () => {
+      if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+    });
+
+    updateUnitButton();
+    renderTargetState();
+    updateDistance();
+
+    if (!window.isSecureContext){
+      secureWarningEl.hidden = false;
+    }
+    if (!("geolocation" in navigator)){
+      setGpsStatus("Geolocation isn't supported on this device/browser.", "bad");
+    } else {
+      startWatch();
+    }
+  </script>
+</body>
+</html>
